@@ -103,7 +103,7 @@ func (s *Server) ensureTunnel() (sess *yamux.Session, edgeID string, err error) 
 	return ts.session, ts.edgeID, nil
 }
 
-// forwardViaTunnel 经 Bridge 隧道连到 targetAddr，返回与 SOCKS 客户端对接的流（已读掉 OK\n）
+// forwardViaTunnel 经 Bridge 隧道连到 targetAddr，返回与 SOCKS 客户端对接的流（已读掉 OK\n）；失败时清 session 以便重连
 func (s *Server) forwardViaTunnel(targetAddr string) (net.Conn, error) {
 	sess, edgeID, err := s.ensureTunnel()
 	if err != nil {
@@ -111,17 +111,20 @@ func (s *Server) forwardViaTunnel(targetAddr string) (net.Conn, error) {
 	}
 	stream, err := sess.Open()
 	if err != nil {
+		s.clearTunnel()
 		return nil, err
 	}
 	req := "CONNECT " + edgeID + " 0\nCONNECT " + targetAddr + "\n"
 	if _, err := stream.Write([]byte(req)); err != nil {
 		stream.Close()
+		s.clearTunnel()
 		return nil, err
 	}
 	br := bufio.NewReader(stream)
 	line, err := br.ReadString('\n')
 	if err != nil {
 		stream.Close()
+		s.clearTunnel()
 		return nil, err
 	}
 	if !strings.HasPrefix(strings.TrimSpace(line), "OK") {
@@ -129,6 +132,18 @@ func (s *Server) forwardViaTunnel(targetAddr string) (net.Conn, error) {
 		return nil, fmt.Errorf("tunnel not ok")
 	}
 	return &connWithReader{Conn: stream, r: br}, nil
+}
+
+func (s *Server) clearTunnel() {
+	if s.tunnelState != nil {
+		s.tunnelState.mu.Lock()
+		if s.tunnelState.session != nil {
+			s.tunnelState.session.Close()
+			s.tunnelState.session = nil
+			s.tunnelState.edgeID = ""
+		}
+		s.tunnelState.mu.Unlock()
+	}
 }
 
 type connWithReader struct {
