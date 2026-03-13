@@ -27,6 +27,12 @@ func (s *Server) Run() error {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.HandleFunc("GET /api/edges", func(w http.ResponseWriter, r *http.Request) {
+		s.proxyToApihub(w, r, "/api/edges")
+	})
+	mux.HandleFunc("POST /api/client/auth", func(w http.ResponseWriter, r *http.Request) {
+		s.proxyToApihub(w, r, "/api/client/auth")
+	})
 
 	addr := s.cfg.Listen
 	if addr == "" {
