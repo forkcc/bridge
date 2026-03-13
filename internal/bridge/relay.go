@@ -2,9 +2,13 @@ package bridge
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -98,7 +102,17 @@ func (r *relay) handleClientStream(stream net.Conn) {
 	if !strings.HasPrefix(line, "CONNECT ") {
 		return
 	}
-	edgeID := strings.TrimSpace(strings.TrimPrefix(line, "CONNECT "))
+	parts := strings.Fields(strings.TrimPrefix(line, "CONNECT "))
+	if len(parts) < 1 {
+		return
+	}
+	edgeID := parts[0]
+	var userID uint
+	if len(parts) >= 2 {
+		if u, _ := strconv.ParseUint(parts[1], 10, 32); u > 0 {
+			userID = uint(u)
+		}
+	}
 	r.mu.RLock()
 	edgeSession, ok := r.edgeConns[edgeID]
 	r.mu.RUnlock()
@@ -113,6 +127,27 @@ func (r *relay) handleClientStream(stream net.Conn) {
 	if br.Buffered() > 0 {
 		_, _ = io.Copy(edgeStream, br)
 	}
-	go io.Copy(edgeStream, stream)
-	io.Copy(stream, edgeStream)
+	var bytesIn, bytesOut int64
+	var mu sync.Mutex
+	wrapped := &countConn{Conn: stream, in: &bytesIn, out: &bytesOut, mu: &mu}
+	go io.Copy(edgeStream, wrapped)
+	io.Copy(wrapped, edgeStream)
+	if userID > 0 && r.cfg.ApihubURL != "" {
+		r.reportTraffic(userID, edgeID, bytesIn, bytesOut)
+	}
+}
+
+func (r *relay) reportTraffic(userID uint, edgeID string, bytesIn, bytesOut int64) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"user_id":   userID,
+		"edge_id":   edgeID,
+		"bytes_in":  bytesIn,
+		"bytes_out": bytesOut,
+	})
+	resp, err := http.Post(r.cfg.ApihubURL+"/api/traffic/report", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("bridge: traffic report: %v", err)
+		return
+	}
+	resp.Body.Close()
 }
