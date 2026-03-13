@@ -1,0 +1,12 @@
+# Edge 出口节点配置（--token 与 --id 建议通过命令行传入）
+listen: ":60001"
+apihub_url: "http://localhost:8082"
+
+# 可选：配置文件中的 token/id，命令行优先
+# token: "edge-token-456"
+# id: "edge-1"
+
+max_connections: 1000
+# Android 优化
+max_memory_mb: 50
+low_power_mode: false

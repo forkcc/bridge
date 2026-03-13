@@ -1,0 +1,7 @@
+# Client 用户端 SOCKS5 配置
+socks5_listen: ":1080"
+bridge_url: "http://localhost:8080"
+token: "client-token-123"
+
+# Edge 选择偏好（国家代码）
+country: ""

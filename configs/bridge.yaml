@@ -1,0 +1,7 @@
+# Bridge 转发服务配置
+listen: ":8080"
+edge_listen: ":8081"   # 供 Edge 连接的隧道端口
+
+apihub_url: "http://localhost:8082"
+bridge_id: "bridge-1"
+token: "bridge-token-xxx"
