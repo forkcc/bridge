@@ -94,11 +94,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 
-// Run 启动 HTTP 服务与可选的 MQ 消费者
+// Run 启动 HTTP 服务与可选的 MQ 消费者、定时结算
 func (s *Server) Run() error {
 	if s.mq != nil {
 		go s.consumeTraffic()
 	}
+	go s.startSettleLoop()
 	addr := s.cfg.Listen
 	if addr == "" {
 		addr = ":8082"
