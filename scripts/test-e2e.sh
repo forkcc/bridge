@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 端到端测试：apiHub -> Bridge -> Edge -> Client
-# 需要：PostgreSQL (postgres/postgres)、build/ 下二进制、可选 RabbitMQ
+# 需要：PostgreSQL (postgres/postgres)、build/ 下二进制
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -27,12 +27,12 @@ BRIDGE_PID=$!
 sleep 1
 
 echo "starting edge..."
-./build/edge --token edge-token-456 --id edge-1 &
+./build/edge --token e2e-token --id edge-1 &
 EDGE_PID=$!
 sleep 2
 
 echo "starting client..."
-./build/client configs/client.yaml &
+./build/client --token e2e-token --country cn --config configs/client.yaml &
 CLIENT_PID=$!
 sleep 2
 

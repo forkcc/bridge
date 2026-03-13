@@ -33,7 +33,7 @@ func (s *Server) runTunnel() {
 	if err != nil {
 		return
 	}
-	log.Printf("edge: registered to bridge tunnel as %s", s.cfg.ID)
+	// 隧道注册成功，不打印 info 日志
 	for {
 		stream, err := session.Accept()
 		if err != nil {
@@ -97,17 +97,29 @@ func (s *Server) handleConnectStream(stream net.Conn) {
 	}
 	targetConn, err := net.Dial("tcp", target)
 	if err != nil {
+		log.Printf("edge: connect %s: %v", target, err)
 		return
 	}
 	defer targetConn.Close()
 	if _, err := stream.Write([]byte("OK\n")); err != nil {
 		return
 	}
-	if br.Buffered() > 0 {
-		if _, err := io.Copy(targetConn, br); err != nil {
-			return
+	if n := br.Buffered(); n > 0 {
+		buf := make([]byte, n)
+		nr, _ := br.Read(buf)
+		if nr > 0 {
+			if _, err := targetConn.Write(buf[:nr]); err != nil {
+				return
+			}
 		}
 	}
-	go io.Copy(targetConn, stream)
+	done := make(chan struct{})
+	go func() {
+		io.Copy(targetConn, stream)
+		targetConn.Close()
+		done <- struct{}{}
+	}()
 	io.Copy(stream, targetConn)
+	stream.Close()
+	<-done
 }

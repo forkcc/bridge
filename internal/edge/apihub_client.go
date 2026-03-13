@@ -13,10 +13,14 @@ const heartbeatInterval = 30 * time.Second
 
 // Register 向 apiHub 注册
 func (s *Server) Register() error {
+	addr := s.cfg.BridgeTunnel
+	if addr == "" {
+		addr = "localhost:8081"
+	}
 	body, _ := json.Marshal(map[string]string{
 		"token":   s.cfg.Token,
 		"edge_id": s.cfg.ID,
-		"addr":    s.cfg.Listen,
+		"addr":    addr,
 		"country": "",
 	})
 	resp, err := http.Post(s.cfg.ApihubURL+"/api/edge/register", "application/json", bytes.NewReader(body))
@@ -27,7 +31,6 @@ func (s *Server) Register() error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("register: %d", resp.StatusCode)
 	}
-	log.Printf("edge: registered to apihub as %s", s.cfg.ID)
 	return nil
 }
 

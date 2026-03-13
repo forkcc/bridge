@@ -6,7 +6,8 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// Server 基于纯 TCP + yamux 的服务端（不加密、不压缩）
+// Server 基于纯 TCP + yamux 的服务端
+// 当前为明文传输，不加密、不压缩；内网部署或已有外层加密时可直接使用
 type Server struct {
 	listener net.Listener
 }
@@ -16,18 +17,19 @@ func NewServer(listener net.Listener) *Server {
 	return &Server{listener: listener}
 }
 
-// Accept 接受一个 TCP 连接并返回 yamux.Session
-func (s *Server) Accept() (*yamux.Session, error) {
+// Accept 接受一个 TCP 连接并返回 yamux.Session 与对端地址（供 Bridge 判定 edge 国家等）
+func (s *Server) Accept() (*yamux.Session, net.Addr, error) {
 	conn, err := s.listener.Accept()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	remoteAddr := conn.RemoteAddr()
 	session, err := yamux.Server(conn, nil)
 	if err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return session, nil
+	return session, remoteAddr, nil
 }
 
 // Close 关闭监听器
@@ -38,7 +40,7 @@ func (s *Server) Close() error {
 	return nil
 }
 
-// Dial 拨号到隧道服务端，返回 yamux.Session（纯 TCP，不加密）
+// Dial 拨号到隧道服务端，返回 yamux.Session（纯 TCP，无 TLS）
 func Dial(addr string) (*yamux.Session, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {

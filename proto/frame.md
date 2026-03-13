@@ -1,9 +1,18 @@
 # 隧道帧格式与协议
 
+## 数据流模式（必须遵守）
+
+流量**必须**经 Bridge 中转，不允许 Client 与 Edge 直连：
+
+- **请求方向**：`Client → Bridge → Edge → 目标`
+- **响应方向**：`目标 → Edge → Bridge → Client`
+
+即：**client → bridge → edge**，**edge → bridge → client**。Bridge 在中间做双向转发，Edge 与 Client 之间没有独立连接。
+
 ## 传输层
 
-- **Client/Edge 与 Bridge**：当前为 **TCP + yamux**（计划支持 QUIC 优先、不可用时降级 TCP）。
-- **不加密、不压缩**（方案 A）。
+- **Client/Edge 与 Bridge**：当前为 **纯 TCP + yamux**。
+- **不加密、不压缩**。内网部署或外层已有加密（VPN / WireGuard 等）时可直接使用。
 
 ## 帧格式（流内可选）
 

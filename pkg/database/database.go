@@ -66,12 +66,8 @@ func autoMigrate(db *gorm.DB) error {
 		&models.Node{},
 		&models.BridgeRegistration{},
 		&models.EdgeRegistration{},
-		&models.ClientSession{},
 		&models.ClientEdgeBinding{},
-		&models.FrozenBalance{},
 		&models.FundFlow{},
 		&models.TrafficStat{},
-		&models.MessageTracking{},
-		&models.CountryPreference{},
 	)
 }

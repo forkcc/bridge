@@ -2,7 +2,6 @@ package apihub
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -34,6 +33,7 @@ func (s *Server) handleTrafficReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+	// 流量统计始终记录（审计用途），计费扣款在后续判断阈值
 	if err := s.db.Create(&models.TrafficStat{
 		UserID:     req.UserID,
 		EdgeID:     req.EdgeID,
@@ -44,36 +44,28 @@ func (s *Server) handleTrafficReport(w http.ResponseWriter, r *http.Request) {
 		responseErr(w, http.StatusInternalServerError, "report failed")
 		return
 	}
-	if s.mq != nil {
-		messageID := fmt.Sprintf("traffic-%d-%s", now.UnixNano(), req.EdgeID)
-		payload, _ := json.Marshal(map[string]interface{}{
-			"message_id": messageID,
-			"user_id":    req.UserID,
-			"edge_id":    req.EdgeID,
-			"bytes_in":   req.BytesIn,
-			"bytes_out":  req.BytesOut,
+	// 计费：按 KB 计算费用，直接从余额扣除
+	totalKB := (req.BytesIn + req.BytesOut) / 1024
+	if totalKB > 0 {
+		s.db.Transaction(func(tx *gorm.DB) error {
+			var u models.User
+			if err := tx.Where("id = ?", req.UserID).First(&u).Error; err != nil {
+				return err
+			}
+			newBalance := u.Balance - totalKB
+			if newBalance < 0 {
+				newBalance = 0
+			}
+			if err := tx.Model(&models.User{}).Where("id = ?", req.UserID).Update("balance", newBalance).Error; err != nil {
+				return err
+			}
+			return tx.Create(&models.FundFlow{
+				UserID:  req.UserID,
+				Amount:  -totalKB,
+				Balance: newBalance,
+				Type:    "traffic",
+			}).Error
 		})
-		_ = s.db.Create(&models.MessageTracking{
-			MessageID: messageID,
-			Topic:     s.cfg.RabbitMQ.QueueTraffic,
-			Payload:   string(payload),
-			Status:    "pending",
-		})
-		_ = s.mq.Publish(s.cfg.RabbitMQ.QueueTraffic, map[string]interface{}{
-			"message_id": messageID,
-			"user_id":    req.UserID,
-			"edge_id":    req.EdgeID,
-			"bytes_in":   req.BytesIn,
-			"bytes_out":  req.BytesOut,
-		})
-	} else {
-		// 无 MQ 时同步计费
-		amount := (req.BytesIn + req.BytesOut) / (1024 * 1024)
-		if amount > 0 {
-			refID := time.Now().Format("20060102150405")
-			_ = s.db.Create(&models.FrozenBalance{UserID: req.UserID, Amount: amount, Reason: "traffic", RefID: refID})
-			_ = s.db.Model(&models.User{}).Where("id = ?", req.UserID).Update("frozen_balance", gorm.Expr("frozen_balance + ?", amount))
-		}
 	}
 	responseJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

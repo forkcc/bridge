@@ -3,6 +3,8 @@ package bridge
 import (
 	"log"
 	"net/http"
+
+	"github.com/lionsoul2014/ip2region/binding/golang/service"
 )
 
 // Server Bridge 服务
@@ -21,8 +23,28 @@ func (s *Server) Run() error {
 		log.Printf("bridge: register failed: %v", err)
 	}
 	go s.startHeartbeat()
+
+	var ip2r *service.Ip2Region
+	if s.cfg.Ip2RegionXDB != "" {
+		v4Config, err := service.NewV4Config(service.VIndexCache, s.cfg.Ip2RegionXDB, 4)
+		if err != nil {
+			log.Printf("bridge: ip2region v4 init: %v", err)
+		} else {
+			var v6Config *service.Config
+			if s.cfg.Ip2RegionXDB6 != "" {
+				v6Config, _ = service.NewV6Config(service.VIndexCache, s.cfg.Ip2RegionXDB6, 2)
+			}
+			ip2r, err = service.NewIp2Region(v4Config, v6Config)
+			if err != nil {
+				log.Printf("bridge: ip2region: %v", err)
+			} else {
+				log.Printf("bridge: ip2region enabled (v4=%s)", s.cfg.Ip2RegionXDB)
+			}
+		}
+	}
+
 	go func() {
-		if err := newRelay(s.cfg).run(); err != nil {
+		if err := newRelay(s.cfg, ip2r).run(); err != nil {
 			log.Printf("bridge: relay: %v", err)
 		}
 	}()
@@ -37,6 +59,12 @@ func (s *Server) Run() error {
 	})
 	mux.HandleFunc("POST /api/client/auth", func(w http.ResponseWriter, r *http.Request) {
 		s.proxyToApihub(w, r, "/api/client/auth")
+	})
+	mux.HandleFunc("POST /api/client/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		s.proxyToApihub(w, r, "/api/client/heartbeat")
+	})
+	mux.HandleFunc("GET /api/user/balance", func(w http.ResponseWriter, r *http.Request) {
+		s.proxyToApihub(w, r, "/api/user/balance")
 	})
 
 	addr := s.cfg.Listen

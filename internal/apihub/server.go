@@ -8,15 +8,12 @@ import (
 	"gorm.io/gorm"
 
 	"proxy-bridge/pkg/database"
-	"proxy-bridge/pkg/models"
-	"proxy-bridge/pkg/rabbitmq"
 )
 
 // Server apiHub HTTP 服务
 type Server struct {
 	cfg *Config
 	db  *gorm.DB
-	mq  *rabbitmq.Client
 }
 
 // NewServer 创建 apiHub 服务
@@ -33,17 +30,7 @@ func NewServer(cfg *Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	srv := &Server{cfg: cfg, db: db}
-	if cfg.RabbitMQ.URL != "" {
-		mq, err := rabbitmq.New(cfg.RabbitMQ.URL)
-		if err != nil {
-			log.Printf("apihub: rabbitmq init skip: %v", err)
-		} else {
-			srv.mq = mq
-			_ = mq.EnsureQueue(cfg.RabbitMQ.QueueTraffic)
-		}
-	}
-	return srv, nil
+	return &Server{cfg: cfg, db: db}, nil
 }
 
 // responseJSON 写 JSON 响应
@@ -74,9 +61,12 @@ func (s *Server) Router() *http.ServeMux {
 	// Edge
 	mux.HandleFunc("POST /api/edge/register", s.handleEdgeRegister)
 	mux.HandleFunc("POST /api/edge/heartbeat", s.handleEdgeHeartbeat)
+	mux.HandleFunc("POST /api/edge/country", s.handleEdgeSetCountry)
 
 	// Client
 	mux.HandleFunc("POST /api/client/auth", s.handleClientAuth)
+	mux.HandleFunc("POST /api/client/heartbeat", s.handleClientHeartbeat)
+	mux.HandleFunc("POST /api/client/country", s.handleClientSetCountry)
 	mux.HandleFunc("GET /api/edges", s.handleEdgesList)
 
 	// 流量与计费
@@ -84,6 +74,7 @@ func (s *Server) Router() *http.ServeMux {
 
 	// 用户
 	mux.HandleFunc("POST /api/user/login", s.handleUserLogin)
+	mux.HandleFunc("GET /api/user/balance", s.handleUserBalance)
 
 	return mux
 }
@@ -94,12 +85,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 
-// Run 启动 HTTP 服务与可选的 MQ 消费者、定时结算
+// Run 启动 HTTP 服务
 func (s *Server) Run() error {
-	if s.mq != nil {
-		go s.consumeTraffic()
-	}
-	go s.startSettleLoop()
+	go s.startBindingCleanupLoop()
 	addr := s.cfg.Listen
 	if addr == "" {
 		addr = ":8082"
@@ -108,36 +96,3 @@ func (s *Server) Run() error {
 	return http.ListenAndServe(addr, s.Router())
 }
 
-// consumeTraffic 消费流量计费队列：冻结余额并更新 message_tracking
-func (s *Server) consumeTraffic() {
-	q := s.cfg.RabbitMQ.QueueTraffic
-	if q == "" {
-		q = "traffic_billing"
-	}
-	_ = s.mq.Consume(q, func(body []byte) error {
-		var msg struct {
-			MessageID string `json:"message_id"`
-			UserID    uint   `json:"user_id"`
-			EdgeID    string `json:"edge_id"`
-			BytesIn   int64  `json:"bytes_in"`
-			BytesOut  int64  `json:"bytes_out"`
-		}
-		if err := json.Unmarshal(body, &msg); err != nil {
-			return err
-		}
-		amount := (msg.BytesIn + msg.BytesOut) / (1024 * 1024)
-		if amount > 0 {
-			if err := s.db.Create(&models.FrozenBalance{
-				UserID: msg.UserID,
-				Amount: amount,
-				Reason: "traffic",
-				RefID:  msg.MessageID,
-			}).Error; err != nil {
-				return err
-			}
-			_ = s.db.Model(&models.User{}).Where("id = ?", msg.UserID).Update("frozen_balance", gorm.Expr("frozen_balance + ?", amount))
-		}
-		_ = s.db.Model(&models.MessageTracking{}).Where("message_id = ?", msg.MessageID).Update("status", "done")
-		return nil
-	})
-}

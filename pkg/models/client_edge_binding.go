@@ -7,7 +7,6 @@ type ClientEdgeBinding struct {
 	ID        uint      `gorm:"primaryKey"`
 	ClientID  string    `gorm:"column:client_id;index;size:64;not null"`
 	EdgeID    string    `gorm:"column:edge_id;index;size:64;not null"`
-	Country   string    `gorm:"size:8;default:''"`
 	CreatedAt time.Time `gorm:"autoCreateTime"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 }

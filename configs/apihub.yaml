@@ -8,8 +8,3 @@ database:
   password: "postgres"
   dbname: "proxy_bridge"
   sslmode: "disable"
-
-rabbitmq:
-  url: "amqp://guest:guest@localhost:5672/"
-  queue_traffic: "traffic_billing"
-  queue_settle: "frozen_settle"

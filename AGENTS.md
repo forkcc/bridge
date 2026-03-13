@@ -210,15 +210,15 @@ go test -v ./pkg/tunnel -run TestReadFrame
 - 添加TCP_NODELAY设置减少延迟
 
 ### Token认证机制
-系统使用两层token认证：
+**Token 与 User 挂钩方式**：`nodes` 表**没有** `user_id`；关联靠 **token**：`users.token` 存用户令牌，`nodes.token` 指向该值（同 token = 同用户）。
 
-1. **用户认证**：`users`表存储用户名密码，用于账户登录
-2. **节点Token**：`nodes`表的`token`字段，每个节点（client/edge）都有唯一token，用于组件间认证
-   - Client启动时使用`client-token-123`
-   - Edge启动时使用`edge-token-456`
-   - 这些token在nodes表中唯一，与user表无关
+1. **用户认证**：`users` 表有用户名密码和 **`token`** 字段（用户级令牌，唯一）
+2. **节点认证**：`nodes` 表的 `token` 须与 **`users.token`** 一致；认证时先查 `users.token` 存在，再按 `node_type` 从 `nodes` 取对应节点
+   - Client 用 **client 类型** 节点（`nodes.token = users.token`）；拉取 Edge 列表只返回 **同一 token** 的 edge
+   - Edge 用 **edge 类型** 节点（同上）
+   - 若 `users` 中无该 token，则无法连接
 
-**重要**：Edge启动必须通过命令行参数传递`--token`和`--id`，即使配置文件中有这些字段。
+**重要**：Edge 启动须传 `--token` 和 `--id`。为用户在 `users` 表设置 `token`，并在 `nodes` 表创建 client/edge 节点且 `nodes.token` 与 `users.token` 相同。
 
 ### 隧道复用优化
 Edge的`basicTunnel.Process`已优化支持单个TCP连接处理多个CONNECT请求：
@@ -233,6 +233,17 @@ Edge的`basicTunnel.Process`已优化支持单个TCP连接处理多个CONNECT请
 - Edge隧道端口60001被占用：`lsof -ti:60001 | xargs kill -9`
 - 建议使用`scripts/test-e2e.sh`脚本管理进程生命周期
 
+### Edge 一启动就退出
+原因：`Run()` 中只调用一次 `runTunnel()`，隧道断开（Bridge 未起、网络断开、Bridge 重启等）后函数返回，进程随即退出。  
+处理：在 `Run()` 中对 `runTunnel()` 做死循环 + 断线后 5 秒重连，使 Edge 常驻并在隧道恢复后自动重连。
+
+### 如何确认流量从 Edge 流出
+- **看 Edge 日志**：每次经本 Edge 出口的 CONNECT 会打一行 `edge: connect <host:port> (流量经本 edge 出口)`，有该日志即说明请求从该 Edge 流出。
+- **看出口 IP**：通过 SOCKS5 访问“出口 IP”类服务，返回的 IP 应为 **Edge 所在机器**的公网 IP，而非本机。示例：
+  - `curl -x socks5h://127.0.0.1:1080 https://api.ipify.org`
+  - `curl -x socks5h://127.0.0.1:1080 https://ifconfig.me`
+  若返回的 IP 与运行 Edge 的机器公网 IP 一致，即可确认流量是从该 Edge 流出的。
+
 ### 架构演进
 从旧router架构迁移到apiHub架构：
 - apiHub作为中央API服务，负责认证、计费、注册、状态管理
@@ -244,6 +255,17 @@ Edge的`basicTunnel.Process`已优化支持单个TCP连接处理多个CONNECT请
 - **Bridge集群间通信**：不能有高延迟，Bridge转发以短连接为主
 - **Edge Android优化**：必须支持32位ARMv7，内存限制50MB，低功耗模式
 - **连接管理**：Client和Edge都只与Bridge保持1个TCP连接，通过多路复用转发流量
+- **数据流模式**：请求走 Client→Bridge→Edge→目标，响应走 目标→Edge→Bridge→Client；不允许 Client 与 Edge 直连，所有流量经 Bridge 中转（见 `proto/frame.md`）
+
+### Client 与 Edge 按国家匹配
+- **Edge 国家**：Edge 不配置国家；由 **Bridge 在 Edge 连上隧道时**根据对端 IP 上报 apiHub（`POST /api/edge/country`）。若对端为 `127.0.0.1`/`::1`/`localhost` 则默认上报 `cn`，便于本地测试。
+- **Client 国家**：Client 启动时**必须指定国家**（`--country cn` 或配置 `country`），拉取 Edge 列表时带 `?country=cn`，apiHub 只返回该国且在线的 edge，实现按国家匹配。
+
+### Client 与 Edge 双向解绑
+- **绑定**：Client 心跳时上报当前 `edge_id`，apiHub 维护 `client_edge_bindings` 表（client_id=token, edge_id）。
+- **仅返回在线 Edge**：拉取 Edge 列表时只返回 `last_seen` 在 2 分钟内的 edge，避免选到已下线的节点。
+- **Client 下线 → Edge 解绑**：apiHub 定时任务（约 1 分钟）删除“client 超过 2 分钟未心跳”的绑定，该 edge 可被其他 client 使用。
+- **Edge 下线 → Client 换绑**：定时任务删除“edge 超过 2 分钟未心跳”的绑定；Client 侧隧道失败会 `clearTunnel()`，下次请求重新拉列表并绑定新的在线 edge。
 
 ## 附加说明
 
