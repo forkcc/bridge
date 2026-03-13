@@ -2,6 +2,7 @@ package apihub
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -43,20 +44,36 @@ func (s *Server) handleTrafficReport(w http.ResponseWriter, r *http.Request) {
 		responseErr(w, http.StatusInternalServerError, "report failed")
 		return
 	}
-	// 同步计费：按流量冻结余额（简化：每 MB 1 单位，不足 1MB 按 0）
-	amount := (req.BytesIn + req.BytesOut) / (1024 * 1024)
-	if amount > 0 {
-		refID := time.Now().Format("20060102150405")
-		if err := s.db.Create(&models.FrozenBalance{
-			UserID: req.UserID,
-			Amount: amount,
-			Reason: "traffic",
-			RefID:  refID,
-		}).Error; err != nil {
-			responseJSON(w, http.StatusOK, map[string]string{"status": "ok", "warning": "freeze failed"})
-			return
+	if s.mq != nil {
+		messageID := fmt.Sprintf("traffic-%d-%s", now.UnixNano(), req.EdgeID)
+		payload, _ := json.Marshal(map[string]interface{}{
+			"message_id": messageID,
+			"user_id":    req.UserID,
+			"edge_id":    req.EdgeID,
+			"bytes_in":   req.BytesIn,
+			"bytes_out":  req.BytesOut,
+		})
+		_ = s.db.Create(&models.MessageTracking{
+			MessageID: messageID,
+			Topic:     s.cfg.RabbitMQ.QueueTraffic,
+			Payload:   string(payload),
+			Status:    "pending",
+		})
+		_ = s.mq.Publish(s.cfg.RabbitMQ.QueueTraffic, map[string]interface{}{
+			"message_id": messageID,
+			"user_id":    req.UserID,
+			"edge_id":    req.EdgeID,
+			"bytes_in":   req.BytesIn,
+			"bytes_out":  req.BytesOut,
+		})
+	} else {
+		// 无 MQ 时同步计费
+		amount := (req.BytesIn + req.BytesOut) / (1024 * 1024)
+		if amount > 0 {
+			refID := time.Now().Format("20060102150405")
+			_ = s.db.Create(&models.FrozenBalance{UserID: req.UserID, Amount: amount, Reason: "traffic", RefID: refID})
+			_ = s.db.Model(&models.User{}).Where("id = ?", req.UserID).Update("frozen_balance", gorm.Expr("frozen_balance + ?", amount))
 		}
-		_ = s.db.Model(&models.User{}).Where("id = ?", req.UserID).Update("frozen_balance", gorm.Expr("frozen_balance + ?", amount))
 	}
 	responseJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
