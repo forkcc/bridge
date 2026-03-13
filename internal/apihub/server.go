@@ -69,7 +69,7 @@ func (s *Server) Router() *http.ServeMux {
 	mux.HandleFunc("POST /api/client/country", s.handleClientSetCountry)
 	mux.HandleFunc("GET /api/edges", s.handleEdgesList)
 
-	// 流量与计费
+	// 流量与计费（审计 + 立即结算）
 	mux.HandleFunc("POST /api/traffic/report", s.handleTrafficReport)
 
 	// 用户

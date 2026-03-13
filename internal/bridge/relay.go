@@ -27,10 +27,8 @@ type balanceEntry struct {
 	expireAt time.Time
 }
 
-// countryUnknown 无法解析时的默认国家代码，保证 nodes.country 一定有值
 const countryUnknown = "unknown"
 
-// countryFromAddr 根据连接对端 IP 得到国家：127.0.0.1/::1/localhost 固定 cn；否则用 ip2region 解析；解析不到返回 unknown
 func (r *relay) countryFromAddr(addr net.Addr) string {
 	s := addr.String()
 	host, _, _ := net.SplitHostPort(s)
@@ -95,7 +93,6 @@ func (r *relay) reportClientCountry(token, country string) {
 	resp.Body.Close()
 }
 
-// relay 隧道转发：Edge 与 Client 连接管理、双向转发（TCP，QUIC 后续在 Client/Edge 侧加）
 type relay struct {
 	cfg       *Config
 	ip2r      *service.Ip2Region
@@ -160,7 +157,6 @@ func (r *relay) handleSession(session *yamux.Session, remoteAddr net.Addr) {
 		country := r.countryFromAddr(remoteAddr)
 		r.reportEdgeCountry(edgeID, country)
 		log.Printf("bridge: edge %s connected (country=%s)", edgeID, country)
-		// 不关闭 session，保留给 handleClientStream 转发用；Edge 断开时由 Open() 失败或后续清理感知
 		return
 	}
 	if strings.HasPrefix(line, "CLIENT ") {
@@ -168,8 +164,8 @@ func (r *relay) handleSession(session *yamux.Session, remoteAddr net.Addr) {
 		stream.Close()
 		country := r.countryFromAddr(remoteAddr)
 		r.reportClientCountry(clientToken, country)
-		defer session.Close()
 		r.handleClientSession(session)
+		session.Close()
 		return
 	}
 	stream.Close()
@@ -180,7 +176,7 @@ func (r *relay) handleClientSession(session *yamux.Session) {
 	for {
 		stream, err := session.Accept()
 		if err != nil {
-			return
+			break
 		}
 		go r.handleClientStream(stream)
 	}
@@ -208,7 +204,6 @@ func (r *relay) handleClientStream(stream net.Conn) {
 			userID = uint(u)
 		}
 	}
-	// 余额检查：余额<=0 拒绝转发
 	if userID > 0 && r.cfg.ApihubURL != "" && !r.checkBalance(userID) {
 		stream.Write([]byte("ERR insufficient balance\n"))
 		return
@@ -224,7 +219,6 @@ func (r *relay) handleClientStream(stream net.Conn) {
 		return
 	}
 	defer edgeStream.Close()
-	// 仅转发 bufio 已缓冲的数据（如 "CONNECT host:port\n"），不能用 io.Copy(edgeStream, br) 否则会阻塞到 EOF
 	if n := br.Buffered(); n > 0 {
 		buf := make([]byte, n)
 		nr, _ := br.Read(buf)
@@ -234,7 +228,6 @@ func (r *relay) handleClientStream(stream net.Conn) {
 			}
 		}
 	}
-	// in = 从 client Read = 用户上行(out)；out = 向 client Write = 用户下行(in)
 	var upBytes, downBytes int64
 	var mu sync.Mutex
 	wrapped := &countConn{Conn: stream, in: &upBytes, out: &downBytes, mu: &mu}
@@ -247,10 +240,25 @@ func (r *relay) handleClientStream(stream net.Conn) {
 	io.Copy(wrapped, edgeStream)
 	stream.Close()
 	<-done
-	if userID > 0 && r.cfg.ApihubURL != "" {
+
+	totalBytes := downBytes + upBytes
+	if totalBytes > 0 && r.cfg.ApihubURL != "" {
 		r.reportTraffic(userID, edgeID, downBytes, upBytes)
+		// 更新本地余额缓存
+		if userID > 0 {
+			kb := totalBytes / 1024
+			if kb > 0 {
+				r.balCacheMu.Lock()
+				if e, ok := r.balCache[userID]; ok {
+					e.balance -= kb
+				}
+				r.balCacheMu.Unlock()
+			}
+		}
 	}
 }
+
+// ---------- 余额检查 ----------
 
 func (r *relay) checkBalance(userID uint) bool {
 	now := time.Now()
@@ -262,10 +270,9 @@ func (r *relay) checkBalance(userID uint) bool {
 	}
 	r.balCacheMu.RUnlock()
 
-	// 缓存未命中或已过期，从 apiHub 拉取
 	bal, err := r.fetchBalance(userID)
 	if err != nil {
-		return true // apiHub 不可达时放行
+		return true
 	}
 	r.balCacheMu.Lock()
 	r.balCache[userID] = &balanceEntry{balance: bal, expireAt: now.Add(balanceCacheTTL)}
@@ -288,6 +295,8 @@ func (r *relay) fetchBalance(userID uint) (int64, error) {
 	return result.Balance, nil
 }
 
+// ---------- 流量上报（审计 + 立即结算） ----------
+
 func (r *relay) reportTraffic(userID uint, edgeID string, bytesIn, bytesOut int64) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"user_id":   userID,
@@ -301,14 +310,4 @@ func (r *relay) reportTraffic(userID uint, edgeID string, bytesIn, bytesOut int6
 		return
 	}
 	resp.Body.Close()
-
-	// 本地缓存同步扣减，避免下次连接还要查 apiHub
-	totalKB := (bytesIn + bytesOut) / 1024
-	if totalKB > 0 {
-		r.balCacheMu.Lock()
-		if e, ok := r.balCache[userID]; ok {
-			e.balance -= totalKB
-		}
-		r.balCacheMu.Unlock()
-	}
 }

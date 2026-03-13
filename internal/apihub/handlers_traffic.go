@@ -2,6 +2,7 @@ package apihub
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 	"proxy-bridge/pkg/models"
 )
 
-// TrafficReportRequest 流量上报请求
+// TrafficReportRequest 流量上报 + 立即结算
 type TrafficReportRequest struct {
 	UserID   uint   `json:"user_id"`
 	EdgeID   string `json:"edge_id"`
@@ -32,40 +33,72 @@ func (s *Server) handleTrafficReport(w http.ResponseWriter, r *http.Request) {
 		responseErr(w, http.StatusBadRequest, "user_id and edge_id required")
 		return
 	}
-	now := time.Now()
-	// 流量统计始终记录（审计用途），计费扣款在后续判断阈值
-	if err := s.db.Create(&models.TrafficStat{
-		UserID:     req.UserID,
-		EdgeID:     req.EdgeID,
-		BytesIn:    req.BytesIn,
-		BytesOut:   req.BytesOut,
-		ReportedAt: now,
-	}).Error; err != nil {
+
+	totalKB := (req.BytesIn + req.BytesOut) / 1024
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 审计记录
+		if err := tx.Create(&models.TrafficStat{
+			UserID:     req.UserID,
+			EdgeID:     req.EdgeID,
+			BytesIn:    req.BytesIn,
+			BytesOut:   req.BytesOut,
+			ReportedAt: time.Now(),
+		}).Error; err != nil {
+			return err
+		}
+
+		if totalKB <= 0 {
+			return nil
+		}
+
+		// Client 扣费
+		var clientBalance int64
+		if err := tx.Raw(
+			"UPDATE users SET balance = GREATEST(balance - ?, 0), updated_at = NOW() WHERE id = ? RETURNING balance",
+			totalKB, req.UserID,
+		).Scan(&clientBalance).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&models.FundFlow{
+			UserID:  req.UserID,
+			Amount:  -totalKB,
+			Balance: clientBalance,
+			Type:    "traffic_client",
+		}).Error; err != nil {
+			return err
+		}
+
+		// Edge 赚取：通过 edge_registrations → nodes 查找 edge 用户
+		var node models.Node
+		if err := tx.Joins("JOIN edge_registrations ON edge_registrations.node_id = nodes.id").
+			Where("edge_registrations.edge_id = ?", req.EdgeID).
+			First(&node).Error; err != nil {
+			log.Printf("apihub: edge %s user lookup failed: %v", req.EdgeID, err)
+			return nil
+		}
+		if node.UserID == 0 {
+			return nil
+		}
+		var edgeBalance int64
+		if err := tx.Raw(
+			"UPDATE users SET balance = balance + ?, updated_at = NOW() WHERE id = ? RETURNING balance",
+			totalKB, node.UserID,
+		).Scan(&edgeBalance).Error; err != nil {
+			return err
+		}
+		return tx.Create(&models.FundFlow{
+			UserID:  node.UserID,
+			Amount:  totalKB,
+			Balance: edgeBalance,
+			Type:    "traffic_edge",
+		}).Error
+	})
+
+	if err != nil {
+		log.Printf("apihub: traffic report+settle user=%d edge=%s: %v", req.UserID, req.EdgeID, err)
 		responseErr(w, http.StatusInternalServerError, "report failed")
 		return
-	}
-	// 计费：按 KB 计算费用，直接从余额扣除
-	totalKB := (req.BytesIn + req.BytesOut) / 1024
-	if totalKB > 0 {
-		s.db.Transaction(func(tx *gorm.DB) error {
-			var u models.User
-			if err := tx.Where("id = ?", req.UserID).First(&u).Error; err != nil {
-				return err
-			}
-			newBalance := u.Balance - totalKB
-			if newBalance < 0 {
-				newBalance = 0
-			}
-			if err := tx.Model(&models.User{}).Where("id = ?", req.UserID).Update("balance", newBalance).Error; err != nil {
-				return err
-			}
-			return tx.Create(&models.FundFlow{
-				UserID:  req.UserID,
-				Amount:  -totalKB,
-				Balance: newBalance,
-				Type:    "traffic",
-			}).Error
-		})
 	}
 	responseJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
