@@ -41,7 +41,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "testing SOCKS5 (curl via 127.0.0.1:1080)..."
-curl -s -x socks5h://127.0.0.1:1080 -m 10 -o /dev/null -w "%{http_code}" http://example.com | grep -q 200 || true
-
-echo "e2e done."
+echo "testing SOCKS5: 100+ requests required..."
+SUCCESS=0
+TOTAL=110
+for i in $(seq 1 $TOTAL); do
+  CODE=$(curl -s -x socks5h://127.0.0.1:1080 -m 15 -o /dev/null -w "%{http_code}" http://example.com 2>/dev/null || echo "000")
+  if [ "$CODE" = "200" ]; then
+    SUCCESS=$((SUCCESS + 1))
+  fi
+  if [ $((i % 20)) -eq 0 ]; then
+    echo "  $i/$TOTAL ok=$SUCCESS"
+  fi
+done
+echo "result: $SUCCESS/$TOTAL"
+if [ "$SUCCESS" -lt 100 ]; then
+  echo "e2e FAIL: need 100+ success, got $SUCCESS"
+  exit 1
+fi
+echo "e2e PASS: $SUCCESS requests succeeded."
