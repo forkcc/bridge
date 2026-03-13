@@ -65,11 +65,15 @@ func (s *Server) serveSOCKS5(conn net.Conn) {
 	}
 	port := binary.BigEndian.Uint16(buf[:2])
 	targetAddr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	target, err := net.Dial("tcp", targetAddr)
+	var target net.Conn
+	target, err := s.forwardViaTunnel(targetAddr)
 	if err != nil {
-		log.Printf("client: dial %s: %v", targetAddr, err)
-		conn.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
-		return
+		target, err = net.Dial("tcp", targetAddr)
+		if err != nil {
+			log.Printf("client: dial %s: %v", targetAddr, err)
+			conn.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+			return
+		}
 	}
 	defer target.Close()
 	if _, err := conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {

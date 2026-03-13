@@ -7,7 +7,8 @@ import (
 
 // Server Client SOCKS5 服务
 type Server struct {
-	cfg *Config
+	cfg         *Config
+	tunnelState *tunnelState
 }
 
 // NewServer 创建 Client 服务
