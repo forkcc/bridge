@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 
 	"proxy-bridge/pkg/tunnel"
 )
@@ -42,9 +43,45 @@ func (s *Server) runTunnel() {
 	}
 }
 
+var (
+	connLimitMu sync.Mutex
+	connSem     chan struct{}
+)
+
+func (s *Server) allowConn() bool {
+	max := s.cfg.MaxConnections
+	if max <= 0 {
+		max = 1000
+	}
+	connLimitMu.Lock()
+	if connSem == nil || cap(connSem) != max {
+		connSem = make(chan struct{}, max)
+	}
+	connLimitMu.Unlock()
+	select {
+	case connSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) releaseConn() {
+	connLimitMu.Lock()
+	sem := connSem
+	connLimitMu.Unlock()
+	if sem != nil {
+		<-sem
+	}
+}
+
 // handleConnectStream 读 CONNECT host:port，连目标并双向转发，先回 OK\n
 func (s *Server) handleConnectStream(stream net.Conn) {
 	defer stream.Close()
+	if !s.allowConn() {
+		return
+	}
+	defer s.releaseConn()
 	br := bufio.NewReader(stream)
 	line, err := br.ReadString('\n')
 	if err != nil {
