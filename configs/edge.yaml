@@ -1,5 +1,6 @@
 # Edge 出口节点配置（--token 与 --id 建议通过命令行传入）
 listen: ":60001"
+bridge_tunnel: "localhost:8081"
 apihub_url: "http://localhost:8082"
 
 # 可选：配置文件中的 token/id，命令行优先

@@ -14,12 +14,12 @@ func NewServer(cfg *Config) *Server {
 	return &Server{cfg: cfg}
 }
 
-// Run 启动：注册、心跳；（隧道监听在 c24 实现）
+// Run 启动：注册、心跳、连 Bridge 隧道并处理 CONNECT 流
 func (s *Server) Run() error {
 	if err := s.Register(); err != nil {
 		log.Printf("edge: register failed: %v", err)
 	}
 	go s.startHeartbeat()
-	// 隧道监听与 CONNECT 处理在 c24
-	select {}
+	s.runTunnel()
+	return nil
 }
