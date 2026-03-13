@@ -1,37 +1,30 @@
 package tunnel
 
 import (
-	"crypto/tls"
 	"net"
 
 	"github.com/hashicorp/yamux"
 )
 
-// Server 基于 TLS + yamux 的服务端会话
+// Server 基于纯 TCP + yamux 的服务端（不加密、不压缩）
 type Server struct {
-	config *tls.Config
 	listener net.Listener
 }
 
-// NewServer 创建隧道服务端，listener 为 TLS 监听器
-func NewServer(listener net.Listener, config *tls.Config) *Server {
-	return &Server{config: config, listener: listener}
+// NewServer 创建隧道服务端，listener 为 TCP 监听器
+func NewServer(listener net.Listener) *Server {
+	return &Server{listener: listener}
 }
 
-// Accept 接受一个 TLS 连接并返回 yamux.Session
+// Accept 接受一个 TCP 连接并返回 yamux.Session
 func (s *Server) Accept() (*yamux.Session, error) {
 	conn, err := s.listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	tlsConn := tls.Server(conn, s.config)
-	if err := tlsConn.Handshake(); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	session, err := yamux.Server(tlsConn, nil)
+	session, err := yamux.Server(conn, nil)
 	if err != nil {
-		_ = tlsConn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	return session, nil
@@ -45,9 +38,9 @@ func (s *Server) Close() error {
 	return nil
 }
 
-// Dial 拨号到隧道服务端，返回 yamux.Session（用于 Client 端）
-func Dial(addr string, tlsConfig *tls.Config) (*yamux.Session, error) {
-	conn, err := tls.Dial("tcp", addr, tlsConfig)
+// Dial 拨号到隧道服务端，返回 yamux.Session（纯 TCP，不加密）
+func Dial(addr string) (*yamux.Session, error) {
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -59,11 +52,7 @@ func Dial(addr string, tlsConfig *tls.Config) (*yamux.Session, error) {
 	return session, nil
 }
 
-// Listen 在地址上创建 TLS 监听器
-func Listen(addr string, config *tls.Config) (net.Listener, error) {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	return tls.NewListener(ln, config), nil
+// Listen 在地址上创建 TCP 监听器（不加密、不压缩）
+func Listen(addr string) (net.Listener, error) {
+	return net.Listen("tcp", addr)
 }
