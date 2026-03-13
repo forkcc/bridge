@@ -81,7 +81,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 // 以下 handler 占位，具体逻辑在后续 commit 实现
-func (s *Server) handleTrafficReport(w http.ResponseWriter, r *http.Request)    { responseJSON(w, http.StatusOK, nil) }
 func (s *Server) handleUserLogin(w http.ResponseWriter, r *http.Request)        { responseJSON(w, http.StatusOK, nil) }
 
 // Run 启动 HTTP 服务
