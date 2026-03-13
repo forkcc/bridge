@@ -15,12 +15,17 @@ func NewServer(cfg *Config) *Server {
 	return &Server{cfg: cfg}
 }
 
-// Run 启动：注册、心跳、HTTP 服务
+// Run 启动：注册、心跳、隧道转发、HTTP 服务
 func (s *Server) Run() error {
 	if err := s.Register(); err != nil {
 		log.Printf("bridge: register failed: %v", err)
 	}
 	go s.startHeartbeat()
+	go func() {
+		if err := newRelay(s.cfg).run(); err != nil {
+			log.Printf("bridge: relay: %v", err)
+		}
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
