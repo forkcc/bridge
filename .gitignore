@@ -1,0 +1,32 @@
+# 构建产物
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 日志与运行时
+*.log
+logs/
+pids/
+
+# 测试与临时
+*.test
+*.out
+coverage.html
+tmp/
+temp/
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 环境与密钥（勿提交）
+.env
+.env.local
+*.pem
